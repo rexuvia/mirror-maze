@@ -145,9 +145,27 @@
             color: #ff00aa;
         }
         
+        .delete-indicator {
+            position: absolute;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            animation: deleteGrow 0.6s ease-out;
+        }
+        
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.7; }
+        }
+        
+        @keyframes deleteGrow {
+            0% { 
+                transform: translate(-50%, -50%) scale(0);
+                opacity: 1;
+            }
+            100% { 
+                transform: translate(-50%, -50%) scale(1);
+                opacity: 0;
+            }
         }
         
         .complete-overlay {
@@ -196,7 +214,7 @@
         
         <div class="instructions" id="instructions" style="display:none;">
             <strong>◆ Goal:</strong> Hit all targets with laser beams<br>
-            <strong>◆ Mirrors:</strong> Click/tap to place, click again to rotate<br>
+            <strong>◆ Mirrors:</strong> Click/tap to place, click again to rotate, hold to delete<br>
             <strong>◆ Harmonic Resonance:</strong> When beams cross, they create a resonance node that emits special harmonic beams<br>
             <strong>◆ Harmonic beams:</strong> Can pass through barriers and hit harmonic targets (purple)<br>
             <strong>◆ Strategy:</strong> Plan beam paths to create intersections where needed<br><br>
@@ -215,6 +233,9 @@
         let selectedMirror = null;
         let particles = [];
         let levelComplete = false;
+        let holdTimer = null;
+        let holdingMirror = null;
+        let holdStartTime = 0;
         
         // Resize canvas
         function resizeCanvas() {
@@ -710,7 +731,38 @@
             });
             
             // Draw mirrors
-            mirrors.forEach(mirror => mirror.draw());
+            mirrors.forEach(mirror => {
+                mirror.draw();
+                
+                // Show deletion progress indicator if holding
+                if (mirror === holdingMirror && holdTimer) {
+                    const elapsed = Date.now() - holdStartTime;
+                    const progress = Math.min(elapsed / 600, 1);
+                    
+                    // Pulsing red ring
+                    ctx.strokeStyle = `rgba(255, 0, 0, ${0.5 + Math.sin(elapsed / 50) * 0.3})`;
+                    ctx.lineWidth = 4;
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = '#ff0000';
+                    ctx.beginPath();
+                    ctx.arc(mirror.x, mirror.y, 35, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                    
+                    // X mark appears as progress increases
+                    if (progress > 0.3) {
+                        ctx.strokeStyle = `rgba(255, 0, 0, ${(progress - 0.3) / 0.7})`;
+                        ctx.lineWidth = 3;
+                        const size = 12;
+                        ctx.beginPath();
+                        ctx.moveTo(mirror.x - size, mirror.y - size);
+                        ctx.lineTo(mirror.x + size, mirror.y + size);
+                        ctx.moveTo(mirror.x + size, mirror.y - size);
+                        ctx.lineTo(mirror.x - size, mirror.y + size);
+                        ctx.stroke();
+                    }
+                }
+            });
             
             // Cast and draw beams
             const beamSegments = [];
@@ -911,6 +963,18 @@
             };
         }
         
+        function showDeleteEffect(x, y) {
+            // Visual feedback for deletion
+            const indicator = document.createElement('div');
+            indicator.className = 'delete-indicator';
+            indicator.style.left = x + 'px';
+            indicator.style.top = y + 'px';
+            indicator.innerHTML = '<div style="width: 60px; height: 60px; border: 3px solid #ff0000; border-radius: 50%; box-shadow: 0 0 20px #ff0000;"></div>';
+            document.body.appendChild(indicator);
+            
+            setTimeout(() => indicator.remove(), 600);
+        }
+        
         function handlePointerDown(e) {
             if (gameState !== 'playing') return;
             e.preventDefault();
@@ -920,7 +984,33 @@
             // Check if clicking existing mirror
             const clicked = mirrors.find(m => m.contains(pos.x, pos.y));
             if (clicked) {
-                clicked.rotate();
+                holdingMirror = clicked;
+                holdStartTime = Date.now();
+                
+                // Start hold timer for deletion
+                holdTimer = setTimeout(() => {
+                    // Delete mirror after holding for 600ms
+                    const index = mirrors.indexOf(holdingMirror);
+                    if (index !== -1) {
+                        mirrors.splice(index, 1);
+                        
+                        // Show deletion effect
+                        const rect = canvas.getBoundingClientRect();
+                        showDeleteEffect(
+                            rect.left + (holdingMirror.x * rect.width / width),
+                            rect.top + (holdingMirror.y * rect.height / height)
+                        );
+                        
+                        // Spawn red particles
+                        for (let i = 0; i < 20; i++) {
+                            particles.push(new Particle(holdingMirror.x, holdingMirror.y, '#ff0000', false));
+                        }
+                        
+                        holdingMirror = null;
+                        holdTimer = null;
+                    }
+                }, 600);
+                
                 return;
             }
             
@@ -931,8 +1021,39 @@
             }
         }
         
+        function handlePointerUp(e) {
+            if (gameState !== 'playing') return;
+            
+            // Clear hold timer
+            if (holdTimer) {
+                clearTimeout(holdTimer);
+                holdTimer = null;
+                
+                // If released quickly (under 600ms), rotate the mirror
+                const holdDuration = Date.now() - holdStartTime;
+                if (holdDuration < 600 && holdingMirror) {
+                    holdingMirror.rotate();
+                }
+                
+                holdingMirror = null;
+            }
+        }
+        
+        function handlePointerCancel(e) {
+            // Cancel hold if pointer leaves canvas or is cancelled
+            if (holdTimer) {
+                clearTimeout(holdTimer);
+                holdTimer = null;
+                holdingMirror = null;
+            }
+        }
+        
         canvas.addEventListener('mousedown', handlePointerDown);
         canvas.addEventListener('touchstart', handlePointerDown);
+        canvas.addEventListener('mouseup', handlePointerUp);
+        canvas.addEventListener('touchend', handlePointerUp);
+        canvas.addEventListener('mouseleave', handlePointerCancel);
+        canvas.addEventListener('touchcancel', handlePointerCancel);
         
         // Game loop
         function gameLoop() {
